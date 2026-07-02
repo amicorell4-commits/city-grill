@@ -2369,16 +2369,21 @@ async function checkAdminScan(){
     return;
   }
 
+  // Besitzer-Check ZUERST: Nur auf dem Handy des Karteninhabers selbst
+  // (also nur wenn die eingeloggte Clerk-ID mit der ID im Code übereinstimmt)
+  // wird überhaupt die PIN-Eingabe angezeigt. So kann niemand anderes,
+  // der den Code/Link öffnet, den Stempel-PIN eingeben oder auch nur ausprobieren.
+  if(window.Clerk.user.id !== scannedUserId){
+    notify('Dieser Code gehört zu einem anderen Konto. Nur der Karteninhaber kann ihn auf seinem eigenen Handy (eingeloggt) bestätigen.');
+    return;
+  }
+
   setTimeout(async () => {
     const eingegebenePIN = await askForPin();
     if(eingegebenePIN === null) return;
 
     if(eingegebenePIN !== BETREIBER_PIN){
       notify('Falsche PIN! Vorgang abgebrochen.');
-      return;
-    }
-    if(window.Clerk.user.id !== scannedUserId){
-      notify('Hinweis: Der gescannte Code gehört zu einem anderen Konto als dem aktuell angemeldeten. Bitte auf dem Gerät des Kunden bestätigen.');
       return;
     }
 
