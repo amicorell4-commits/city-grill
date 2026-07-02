@@ -2231,7 +2231,9 @@ window.addEventListener('load', async () => {
 <script>
 /* ---------- STEMPELKARTE MIT LOGIN (Clerk) ---------- */
 const TOTAL_STAMPS = 10;
-const BETREIBER_PIN = "1234"; // Betreiber-PIN zum Vergeben von Stempeln beim Scan
+// Die Betreiber-PIN wird jetzt NICHT mehr im Browser-Code gespeichert (das wäre unsicher,
+// da jeder Besucher den Quelltext lesen kann), sondern serverseitig in /api/stamp.js
+// über die Umgebungsvariable BETREIBER_PIN geprüft.
 
 const STAMP_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
   <polyline points="20 6 9 17 4 12"></polyline>
@@ -2355,46 +2357,47 @@ function askForPin(){
   });
 }
 
-/* Verarbeitet einen Scan (Betreiber scannt den Kunden-QR-Code und vergibt einen Stempel) */
+/* Verarbeitet einen Scan (Betreiber scannt den Kunden-QR-Code und vergibt einen Stempel).
+   Der Stempel wird über die Server-Funktion /api/stamp vergeben, damit das auch
+   funktioniert, wenn der SCANNENDE (Betreiber) ein anderes Konto hat als der
+   Karteninhaber (Kunde). Die PIN wird serverseitig geprüft, nicht im Browser. */
 async function checkAdminScan(){
   const urlParams = new URLSearchParams(window.location.search);
   const scannedUserId = urlParams.get('scan');
-  if(!scannedUserId || !window.Clerk) return;
+  if(!scannedUserId) return;
 
   // URL sofort säubern, damit beim Neuladen nicht mehrfach gestempelt wird
   window.history.replaceState({}, document.title, window.location.href.split('?')[0]);
-
-  if(!window.Clerk.user){
-    notify('Fehler beim Scan: Bitte melde dich zuerst an.');
-    return;
-  }
-
-  // Besitzer-Check ZUERST: Nur auf dem Handy des Karteninhabers selbst
-  // (also nur wenn die eingeloggte Clerk-ID mit der ID im Code übereinstimmt)
-  // wird überhaupt die PIN-Eingabe angezeigt. So kann niemand anderes,
-  // der den Code/Link öffnet, den Stempel-PIN eingeben oder auch nur ausprobieren.
-  if(window.Clerk.user.id !== scannedUserId){
-    notify('Dieser Code gehört zu einem anderen Konto. Nur der Karteninhaber kann ihn auf seinem eigenen Handy (eingeloggt) bestätigen.');
-    return;
-  }
 
   setTimeout(async () => {
     const eingegebenePIN = await askForPin();
     if(eingegebenePIN === null) return;
 
-    if(eingegebenePIN !== BETREIBER_PIN){
-      notify('Falsche PIN! Vorgang abgebrochen.');
-      return;
-    }
+    try{
+      const response = await fetch('/api/stamp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: scannedUserId, pin: eingegebenePIN })
+      });
+      const data = await response.json();
 
-    let currentStamps = getStampsCount();
-    if(currentStamps < TOTAL_STAMPS){
-      currentStamps++;
-      await window.Clerk.user.update({ unsafeMetadata: { stamps: currentStamps } });
-      renderStampsAndQR();
-      notify('🎉 Stempel erfolgreich hinzugefügt! Aktueller Stand: ' + currentStamps + ' / ' + TOTAL_STAMPS);
-    }else{
-      notify('Die Karte ist bereits voll! Bitte erst einlösen.');
+      if(!response.ok){
+        notify(data.error === 'Falsche PIN.' ? 'Falsche PIN! Vorgang abgebrochen.' : (data.error || 'Fehler beim Stempeln.'));
+        return;
+      }
+
+      if(data.full){
+        notify('🎉 Karte ist jetzt voll (' + data.stamps + ' / ' + TOTAL_STAMPS + ')! Gratis-Currywurst bereit.');
+      }else{
+        notify('🎉 Stempel erfolgreich hinzugefügt! Aktueller Stand: ' + data.stamps + ' / ' + TOTAL_STAMPS);
+      }
+
+      // Falls der Scannende selbst der Karteninhaber ist, Ansicht aktualisieren
+      if(window.Clerk && window.Clerk.user && window.Clerk.user.id === scannedUserId){
+        renderStampsAndQR();
+      }
+    }catch(e){
+      notify('Fehler beim Stempeln. Bitte erneut versuchen.');
     }
   }, 300);
 }
